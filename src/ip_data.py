@@ -142,16 +142,13 @@ def gen_db(dbidx: int):
         targets=offender,
     ).write_to_db()
 
-    def people_writer_generator(
-        location: int, generator: bool = True
-    ) -> Callable[[], list[Any]]:
+    def people_writer_generator(location: int) -> Callable[[], list[Any]]:
         def people_writer() -> list[Any]:
             time_stamp = generate_time(START_TIME, END_TIME)
             person = str(base64.b64encode(random.choice(person_names).encode()))[2:-1]
             loc_id = random.choice(range(len(locations)))
             if (
-                not generator
-                and target_time < time_stamp < target_time + timedelta(seconds=15)
+                target_time < time_stamp < target_time + timedelta(seconds=15)
                 and loc_id == location
             ):
                 time_stamp += timedelta(seconds=30)
@@ -159,7 +156,7 @@ def gen_db(dbidx: int):
 
         return people_writer
 
-    _, target_person, _ = people_writer_generator(0, generator=False)()
+    _, target_person, _ = people_writer_generator(-1)()
 
     MockDB(
         db_cursor=cur,
@@ -218,5 +215,4 @@ def gen_db(dbidx: int):
 
 
 if __name__ == "__main__":
-    for i in range(80):
-        gen_db(i + 1)
+    gen_db(0)
