@@ -1,22 +1,28 @@
 import csv
 import random
 from datetime import datetime, timedelta
-from typing import Callable, Any, Iterator
+from typing import Callable, Any, Iterator, Self
 import base64
-from sqlite3 import Cursor, connect
+import sqlite3
 
 NUM_ROWS = 100  # Number of rows to generate
 DDOS = 10
 START_TIME = datetime.now() - timedelta(days=1)
 END_TIME = datetime.now()
+
 ACCESS_SCHEMA = ["time", "ip", "end_point"]
 PEOPLE_SCHEMA = ["time", "person_name", "location_id"]
 SUBNET_SCHEMA = ["location_id", "location_name", "subnet_start", "subnet_end"]
 
-
-# Define the list of endpoints
-endpoints = ["/users", "/leaderboard", "/food", "/dinner", "/register", "/pay"]
-locations = [
+ENDPOINTS = [
+    "/users",
+    "/leaderboard",
+    "/food",
+    "/dinner",
+    "/register",
+    "/pay",
+]
+LOCATIONS = [
     "bathroom",
     "seminar-hall-1",
     "seminar-hall-2",
@@ -25,8 +31,10 @@ locations = [
     "canteen-pixel-block",
     "mrd-auditorium",
 ]
-
-person_names = [
+PERSON_NAMES = [
+    "potukuchi",
+    "naga",
+    "sriprad",
     "reema",
     "adhesh",
     "gamblesh",
@@ -45,7 +53,7 @@ person_names = [
 
 # Function to generate a mock IP address in the format 192.168.x.y
 def generate_ip() -> str:
-    x = random.randint(0, len(locations) - 1)
+    x = random.randint(0, len(LOCATIONS) - 1)
     y = random.randint(0, 255)
     return f"{192}.{168}.{x}.{y}"
 
@@ -66,152 +74,157 @@ def interleave(iters):
             iters.remove(it)
 
 
+def repeat(genrec: Callable[[], list[Any]], times: int) -> Iterator[list[Any]]:
+    for i in range(times):
+        yield genrec()
+
+
 class MockDB:
-    def __init__(
-        self,
-        db_cursor: Cursor,
-        tablename: str,
-        schema: list[str],
-        get_record: Callable[[], list[str]],
-        num_rows: int = NUM_ROWS,
-        targets: list[list[Any]] = [],
-    ) -> None:
-        self.cursor = db_cursor
-        self.tablename = tablename
-        self.schema = schema
-        self.targets = targets
-        self.get_record = get_record
-        self.num_rows = num_rows
+    def __init__(self, dbid: int) -> None:
+        self.dbid = dbid
+        self.target_time = generate_time(START_TIME, END_TIME)
+        self.target_ip = generate_ip()
+        self.target_location = random.randint(0, len(LOCATIONS) - 1)
+        self.target_subnet = random.randint(0, 255)
+        self.target_person = str(
+            base64.b64encode(random.choice(PERSON_NAMES).encode())
+        )[2:-1]
 
-    def normal_records(self) -> Iterator[list[Any]]:
-        for _ in range(self.num_rows):
-            yield self.get_record()
+    def __enter__(self):
+        self.db = sqlite3.connect(f"challenge_{self.dbid}.db")
+        self.cursor = self.db.cursor()
+        return self
 
-    def write_to_db(self) -> None:
-        params = ", ".join(["?"] * len(self.schema))
-        for record in interleave([iter(self.targets), self.normal_records()]):
-            self.cursor.execute(
-                f"INSERT INTO {self.tablename} VALUES ({params})",
-                list(map(str, record)),
-            )
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.db.commit()
+        self.db.close()
 
-    def write_to_file(self) -> None:
-        with open(self.tablename, mode="w") as file:
-            writer = csv.writer(file)
-            writer.writerow(self.schema)
-            for record in interleave([iter(self.targets), self.normal_records()]):
-                writer.writerow(record)
-
-
-def gen_db(dbidx: int):
-    con = connect(f"challenge_{dbidx}.db")
-    cur = con.cursor()
-
-    access_q = ",".join(map(lambda fi: fi + " TEXT", ACCESS_SCHEMA))
-    people_q = ",".join(map(lambda fi: fi + " TEXT", PEOPLE_SCHEMA))
-    subnet_q = ",".join(map(lambda fi: fi + " TEXT", SUBNET_SCHEMA))
-
-    cur.execute(f"CREATE TABLE access({access_q})")
-    cur.execute(f"CREATE TABLE people({people_q})")
-    cur.execute(f"CREATE TABLE subnet({subnet_q})")
-    con.commit()
-
-    def access_writer() -> list[Any]:
-        time_stamp = generate_time(START_TIME, END_TIME)
-        ip = generate_ip()
-        endpoint = random.choice(endpoints)
-        return [time_stamp, ip, endpoint]
-
-    offender = []
-    target_time, target_ip, _ = access_writer()
-    _, _, target_location, target_subnet = map(int, target_ip.split("."))
-    for i in range(DDOS):
-        offender.append(
-            [
-                target_time + timedelta(seconds=random.randint(1, 15)),
-                target_ip,
-                random.choice(endpoints),
-            ]
+    def log_answer(self) -> None:
+        print(
+            f"Database: {self.dbid}",
+            f"Our offender at {self.target_time} "
+            f"named {base64.decodebytes(self.target_person.encode())!r} ({self.target_person}) "
+            f"using {self.target_ip} attacked us "
+            f"from location {LOCATIONS[self.target_location]} ({self.target_location})",
         )
 
-    MockDB(
-        db_cursor=cur,
-        tablename="access",
-        schema=ACCESS_SCHEMA,
-        get_record=access_writer,
-        targets=offender,
-    ).write_to_db()
+    def init_tables(self) -> Self:
+        access_q = ",".join(map(lambda fi: fi + " TEXT", ACCESS_SCHEMA))
+        people_q = ",".join(map(lambda fi: fi + " TEXT", PEOPLE_SCHEMA))
+        subnet_q = ",".join(map(lambda fi: fi + " TEXT", SUBNET_SCHEMA))
 
-    def people_writer_generator(location: int) -> Callable[[], list[Any]]:
-        def people_writer() -> list[Any]:
-            time_stamp = generate_time(START_TIME, END_TIME)
-            person = str(base64.b64encode(random.choice(person_names).encode()))[2:-1]
-            loc_id = random.choice(range(len(locations)))
-            if (
-                target_time < time_stamp < target_time + timedelta(seconds=15)
-                and loc_id == location
-            ):
-                time_stamp += timedelta(seconds=30)
-            return [time_stamp, person, loc_id]
+        self.cursor.execute(f"CREATE TABLE access({access_q})")
+        self.cursor.execute(f"CREATE TABLE people({people_q})")
+        self.cursor.execute(f"CREATE TABLE subnet({subnet_q})")
+        self.db.commit()
+        return self
 
-        return people_writer
+    def write_to_db(
+        self,
+        schema: list[str],
+        tablename: str,
+        targets: Iterator[list[Any]],
+        normal: Iterator[list[Any]],
+    ) -> None:
+        params = ", ".join(["?"] * len(schema))
+        for record in interleave([targets, normal]):
+            self.cursor.execute(
+                f"INSERT INTO {tablename} VALUES ({params})",
+                list(map(str, record)),
+            )
+        self.db.commit()
 
-    _, target_person, _ = people_writer_generator(-1)()
+    def write_to_file(
+        self,
+        schema: list[str],
+        tablename: str,
+        targets: Iterator[list[Any]],
+        normal: Iterator[list[Any]],
+    ) -> None:
+        with open(tablename, mode="w") as file:
+            writer = csv.writer(file)
+            writer.writerow(schema)
+            for record in interleave([targets, normal]):
+                writer.writerow(record)
 
-    MockDB(
-        db_cursor=cur,
-        tablename="people",
-        schema=PEOPLE_SCHEMA,
-        get_record=people_writer_generator(target_location),
-        targets=[[target_time, target_person, target_location]],
-    ).write_to_db()
+    def write_tables(self) -> Self:
+        self.write_to_db(
+            ACCESS_SCHEMA,
+            "access",
+            self.access_target(),
+            repeat(self.access_writer, NUM_ROWS),
+        )
+        self.write_to_db(
+            PEOPLE_SCHEMA,
+            "people",
+            self.people_target(),
+            repeat(self.people_writer, NUM_ROWS),
+        )
+        self.write_to_db(
+            SUBNET_SCHEMA,
+            "subnet",
+            self.subnet_target(),
+            repeat(self.subnet_writer, 0),
+        )
+        return self
 
-    def subnet_writer() -> list[str]:
-        id, name = random.choice(list(enumerate(locations)))
-        return [str(id), name, generate_ip(), generate_ip()]
+    def access_writer(self) -> list[Any]:
+        time_stamp = generate_time(START_TIME, END_TIME)
+        ip = generate_ip()
+        endpoint = random.choice(ENDPOINTS)
+        return [time_stamp, ip, endpoint]
 
-    start = random.randint(max(target_subnet - 20, 0), 255)
-    end = random.randint(start, 255)
-    target_subnet_entry = [
-        target_location,
-        locations[target_location],
-        f"192.168.{target_location}.{start}",
-        f"192.168.{target_location}.{end}",
-    ]
-    subnets: list[list[Any]] = []
-    for x in range(len(locations)):
-        if x == target_location:
-            subnets.append(target_subnet_entry)
-            continue
-        start = random.randint(0, 255)
+    def access_target(self) -> Iterator[list[Any]]:
+        for i in range(DDOS):
+            yield [
+                self.target_time + timedelta(seconds=random.randint(1, 15)),
+                self.target_ip,
+                random.choice(ENDPOINTS),
+            ]
+
+    def people_writer(self) -> list[Any]:
+        time_stamp = generate_time(START_TIME, END_TIME)
+        person = str(base64.b64encode(random.choice(PERSON_NAMES).encode()))[2:-1]
+        loc_id = random.choice(range(len(LOCATIONS)))
+        if (
+            self.target_time < time_stamp < self.target_time + timedelta(seconds=15)
+            and loc_id == self.target_location
+        ):
+            time_stamp += timedelta(seconds=30)
+        return [time_stamp, person, loc_id]
+
+    def people_target(self) -> Iterator[list[Any]]:
+        yield [self.target_time, self.target_person, self.target_location]
+
+    def subnet_writer(self) -> list[str]:
+        raise Exception("There is no subnet writer")
+
+    def subnet_target(self) -> Iterator[list[Any]]:
+        start = random.randint(max(self.target_subnet - 20, 0), 255)
         end = random.randint(start, 255)
-        subnets.append(
-            [
+        target_subnet_entry = [
+            self.target_location,
+            LOCATIONS[self.target_location],
+            f"192.168.{self.target_location}.{start}",
+            f"192.168.{self.target_location}.{end}",
+        ]
+        for x in range(len(LOCATIONS)):
+            if x == self.target_location:
+                yield target_subnet_entry
+                continue
+            start = random.randint(0, 255)
+            end = random.randint(start, 255)
+            yield [
                 x,
-                locations[x],
+                LOCATIONS[x],
                 f"192.168.{x}.{start}",
                 f"192.168.{x}.{end}",
             ]
-        )
 
-    MockDB(
-        db_cursor=cur,
-        tablename="subnet",
-        schema=SUBNET_SCHEMA,
-        num_rows=0,
-        get_record=lambda: [""],
-        targets=subnets,
-    ).write_to_db()
 
-    con.commit()
-    con.close()
-    print(
-        f"Database: {dbidx}",
-        f"Our offender at {target_time} "
-        f"named {base64.decodebytes(target_person.encode())!r} ({target_person}) "
-        f"using {target_ip} attacked us "
-        f"from location {locations[target_location]} ({target_location})",
-    )
+def gen_db(dbidx: int):
+    with MockDB(dbidx) as mdb:
+        mdb.init_tables().write_tables().log_answer()
 
 
 if __name__ == "__main__":
