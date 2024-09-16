@@ -1,9 +1,11 @@
 import csv
 import random
 from datetime import datetime, timedelta
-from typing import Callable, Any, Iterator, Self
+from typing import Callable, Any, Iterator, Self, TypeVar
 import base64
 import sqlite3
+
+T = TypeVar("T")
 
 NUM_ROWS = 100  # Number of rows to generate
 DDOS = 10
@@ -58,13 +60,13 @@ def generate_ip() -> str:
     return f"{192}.{168}.{x}.{y}"
 
 
-def generate_time(start_time, end_time) -> datetime:
+def generate_time(start_time: datetime, end_time: datetime) -> datetime:
     delta = end_time - start_time
     random_seconds = random.randint(0, int(delta.total_seconds()))
     return start_time + timedelta(seconds=random_seconds)
 
 
-def interleave(iters):
+def interleave(iters: list[Iterator[T]]) -> Iterator[T]:
     while iters:
         chosen = min(random.binomialvariate(1, 0.7), len(iters) - 1)
         it = iters[chosen]
@@ -74,7 +76,7 @@ def interleave(iters):
             iters.remove(it)
 
 
-def repeat(genrec: Callable[[], list[Any]], times: int) -> Iterator[list[Any]]:
+def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
     for i in range(times):
         yield genrec()
 
@@ -90,12 +92,12 @@ class MockDB:
             base64.b64encode(random.choice(PERSON_NAMES).encode())
         )[2:-1]
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.db = sqlite3.connect(f"challenge_{self.dbid}.db")
         self.cursor = self.db.cursor()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.db.commit()
         self.db.close()
 
@@ -109,9 +111,12 @@ class MockDB:
         )
 
     def init_tables(self) -> Self:
-        access_q = ",".join(map(lambda fi: fi + " TEXT", ACCESS_SCHEMA))
-        people_q = ",".join(map(lambda fi: fi + " TEXT", PEOPLE_SCHEMA))
-        subnet_q = ",".join(map(lambda fi: fi + " TEXT", SUBNET_SCHEMA))
+        def add_type(fi: str) -> str:
+            return fi + " TEXT"
+
+        access_q = ",".join(map(add_type, ACCESS_SCHEMA))
+        people_q = ",".join(map(add_type, PEOPLE_SCHEMA))
+        subnet_q = ",".join(map(add_type, SUBNET_SCHEMA))
 
         self.cursor.execute(f"CREATE TABLE access({access_q})")
         self.cursor.execute(f"CREATE TABLE people({people_q})")
@@ -222,7 +227,7 @@ class MockDB:
             ]
 
 
-def gen_db(dbidx: int):
+def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
         mdb.init_tables().write_tables().log_answer()
 
