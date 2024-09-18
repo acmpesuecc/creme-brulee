@@ -3,6 +3,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Callable, Any, Iterator, Self, TypeVar
 import base64
+
 import sqlite3
 
 T = TypeVar("T")
@@ -103,11 +104,13 @@ class MockDB:
 
     def log_answer(self) -> None:
         print(
-            f"Database: {self.dbid}",
-            f"Our offender at {self.target_time} "
-            f"named {base64.decodebytes(self.target_person.encode())!r} ({self.target_person}) "
-            f"using {self.target_ip} attacked us "
-            f"from location {LOCATIONS[self.target_location]} ({self.target_location})",
+            "{"
+            f'"database": {self.dbid}, '
+            f'"time": "{str(self.target_time)}", '
+            f'"name": "{base64.decodebytes(self.target_person.encode()).decode()}", '
+            f'"ip": "{self.target_ip}", '
+            f'"location": "{LOCATIONS[self.target_location]}"',
+            "}",
         )
 
     def init_tables(self) -> Self:
