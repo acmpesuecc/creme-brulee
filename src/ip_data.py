@@ -85,8 +85,8 @@ def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
 
 
 class FileWriter(ABC):
-    def __init__(self, base_filename: str):
-        self.base_filename = base_filename
+    def __init__(self):
+        pass
 
     @abstractmethod
     def write_access(self, generator: Iterator[list[Any]]) -> None:
@@ -114,10 +114,12 @@ class JSONFileWriter(FileWriter):
         self.json_file = None
         self.is_first_key = True
         self.base_filename = base_filename
-
-    def init_tables(self) -> None:
         self.json_file = open(f"{self.base_filename}.json", "w")
         self.json_file.write("{")
+
+
+    def init_tables(self) -> None:
+        pass
 
     def _write_key(self, key: str) -> None:
         if not self.is_first_key:
