@@ -5,7 +5,7 @@ import random
 import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import Callable, Any, Iterator, Self, TypeVar, List
+from typing import Callable, Any, Iterator, Self, TypeVar
 
 
 T = TypeVar("T")
@@ -89,15 +89,15 @@ class FileWriter(ABC):
         self.base_filename = base_filename
 
     @abstractmethod
-    def write_access(self, generator: Iterator[List[Any]]) -> None:
+    def write_access(self, generator: Iterator[list[Any]]) -> None:
         pass
 
     @abstractmethod
-    def write_people(self, generator: Iterator[List[Any]]) -> None:
+    def write_people(self, generator: Iterator[list[Any]]) -> None:
         pass
 
     @abstractmethod
-    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
         pass
 
     @abstractmethod
@@ -125,32 +125,31 @@ class JSONFileWriter(FileWriter):
         self.json_file.write(f'"{key}": [')
         self.is_first_key = False
 
-    def _write_records(self, schema: List[str], generator: Iterator[List[Any]]) -> None:
+    def _write_records(self, schema: list[str], generator: Iterator[list[Any]]) -> None:
         is_first_record = True
         for record in generator:
             if not is_first_record:
                 self.json_file.write(",")
-            json_record = json.dumps(dict(zip(schema, map(str, record))))
-            self.json_file.write(json_record)
+            json.dump(
+                dict(zip(schema, map(str, record))), self.json_file)
             is_first_record = False
         self.json_file.write("]")
 
-    def write_access(self, generator: Iterator[List[Any]]) -> None:
+    def write_access(self, generator: Iterator[list[Any]]) -> None:
         self._write_key("access")
         self._write_records(ACCESS_SCHEMA, generator)
 
-    def write_people(self, generator: Iterator[List[Any]]) -> None:
+    def write_people(self, generator: Iterator[list[Any]]) -> None:
         self._write_key("people")
         self._write_records(PEOPLE_SCHEMA, generator)
 
-    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
         self._write_key("subnet")
         self._write_records(SUBNET_SCHEMA, generator)
 
     def close(self):
-        if self.json_file:
-            self.json_file.write("}")
-            self.json_file.close()
+        self.json_file.write("}")
+        self.json_file.close()
 
 
 class SqliteWriter(FileWriter):
@@ -158,14 +157,11 @@ class SqliteWriter(FileWriter):
         self.db = sqlite3.connect(f"{base_filename}.db")
         self.cursor = self.db.cursor()
 
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def close(self) -> None:
         self.db.commit()
         self.db.close()
 
-    def _write_to_db(self, table_name: str, schema: List[str], generator: Iterator[List[Any]]) -> None:
+    def _write_to_db(self, table_name: str, schema: list[str], generator: Iterator[list[Any]]) -> None:
         columns = ", ".join(schema)
         placeholders = ", ".join(["?"] * len(schema))
         query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
@@ -175,13 +171,13 @@ class SqliteWriter(FileWriter):
 
         self.db.commit()
 
-    def write_access(self, generator: Iterator[List[Any]]) -> None:
+    def write_access(self, generator: Iterator[list[Any]]) -> None:
         self._write_to_db("access", ACCESS_SCHEMA, generator)
 
-    def write_people(self, generator: Iterator[List[Any]]) -> None:
+    def write_people(self, generator: Iterator[list[Any]]) -> None:
         self._write_to_db("people", PEOPLE_SCHEMA, generator)
 
-    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
         self._write_to_db("subnet", SUBNET_SCHEMA, generator)
 
     def init_tables(self) -> None:
@@ -213,6 +209,7 @@ class MockDB:
         )[2:-1]
 
     def __enter__(self) -> Self:
+        self.writer.init_tables()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -244,7 +241,6 @@ class MockDB:
 
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
         self.writer = writer_class(f"challenge_{self.dbid}")
-        self.writer.init_tables()
 
         return self
 
