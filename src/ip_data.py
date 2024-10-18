@@ -1,11 +1,34 @@
 import csv
 import random
 from datetime import datetime, timedelta
-from typing import Callable, Any, Iterator, Self, TypeVar
+from typing import Callable, Any, Iterator, TypeVar
 import base64
 import sqlite3
 
 T = TypeVar("T")
+
+def generate_ip(locations_count: int) -> str:
+    x = random.randint(0, locations_count - 1)
+    y = random.randint(0, 255)
+    return f"{192}.{168}.{x}.{y}"
+
+def generate_time(start_time: datetime, end_time: datetime) -> datetime:
+    delta = end_time - start_time
+    random_seconds = random.randint(0, int(delta.total_seconds()))
+    return start_time + timedelta(seconds=random_seconds)
+
+def interleave(iters: list[Iterator[T]]) -> Iterator[T]:
+    while iters:
+        chosen = min(random.randint(0, len(iters) - 1), len(iters) - 1)
+        it = iters[chosen]
+        try:
+            yield next(it)
+        except StopIteration:
+            iters.remove(it)
+
+def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
+    for _ in range(times):
+        yield genrec()
 
 class MockDB:
     def __init__(self, dbid: int, num_rows: int = 100, ddos: int = 10, 
@@ -35,15 +58,15 @@ class MockDB:
             "abhinav", "kaddapa", "rowjee", "🗿",
         ]
 
-        self.target_time = self.generate_time(self.start_time, self.end_time)
-        self.target_ip = self.generate_ip()
+        self.target_time = generate_time(self.start_time, self.end_time)
+        self.target_ip = generate_ip(len(self.locations))
         self.target_location = random.randint(0, len(self.locations) - 1)
         self.target_subnet = random.randint(0, 255)
         self.target_person = str(
             base64.b64encode(random.choice(self.person_names).encode())
         )[2:-1]
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> 'MockDB':
         self.db = sqlite3.connect(f"challenge_{self.dbid}.db")
         self.cursor = self.db.cursor()
         return self
@@ -51,29 +74,6 @@ class MockDB:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.db.commit()
         self.db.close()
-
-    def generate_ip(self) -> str:
-        x = random.randint(0, len(self.locations) - 1)
-        y = random.randint(0, 255)
-        return f"{192}.{168}.{x}.{y}"
-
-    def generate_time(self, start_time: datetime, end_time: datetime) -> datetime:
-        delta = end_time - start_time
-        random_seconds = random.randint(0, int(delta.total_seconds()))
-        return start_time + timedelta(seconds=random_seconds)
-
-    def interleave(self, iters: list[Iterator[T]]) -> Iterator[T]:
-        while iters:
-            chosen = min(random.randint(0, len(iters) - 1), len(iters) - 1)
-            it = iters[chosen]
-            try:
-                yield next(it)
-            except StopIteration:
-                iters.remove(it)
-
-    def repeat(self, genrec: Callable[[], T], times: int) -> Iterator[T]:
-        for _ in range(times):
-            yield genrec()
 
     def log_answer(self) -> None:
         print(
@@ -86,7 +86,7 @@ class MockDB:
             "}",
         )
 
-    def init_tables(self) -> Self:
+    def init_tables(self) -> 'MockDB':
         def add_type(fi: str) -> str:
             return fi + " TEXT"
 
@@ -108,50 +108,37 @@ class MockDB:
         normal: Iterator[list[Any]],
     ) -> None:
         params = ", ".join(["?"] * len(schema))
-        for record in self.interleave([targets, normal]):
+        for record in interleave([targets, normal]):
             self.cursor.execute(
                 f"INSERT INTO {tablename} VALUES ({params})",
                 list(map(str, record)),
             )
         self.db.commit()
 
-    def write_to_file(
-        self,
-        schema: list[str],
-        tablename: str,
-        targets: Iterator[list[Any]],
-        normal: Iterator[list[Any]],
-    ) -> None:
-        with open(tablename, mode="w") as file:
-            writer = csv.writer(file)
-            writer.writerow(schema)
-            for record in self.interleave([targets, normal]):
-                writer.writerow(record)
-
-    def write_tables(self) -> Self:
+    def write_tables(self) -> 'MockDB':
         self.write_to_db(
             self.access_schema,
             "access",
             self.access_target(),
-            self.repeat(self.access_writer, self.num_rows),
+            repeat(self.access_writer, self.num_rows),
         )
         self.write_to_db(
             self.people_schema,
             "people",
             self.people_target(),
-            self.repeat(self.people_writer, self.num_rows),
+            repeat(self.people_writer, self.num_rows),
         )
         self.write_to_db(
             self.subnet_schema,
             "subnet",
             self.subnet_target(),
-            self.repeat(self.subnet_writer, 0),
+            repeat(self.subnet_writer, 0),
         )
         return self
 
     def access_writer(self) -> list[Any]:
-        time_stamp = self.generate_time(self.start_time, self.end_time)
-        ip = self.generate_ip()
+        time_stamp = generate_time(self.start_time, self.end_time)
+        ip = generate_ip(len(self.locations))
         endpoint = random.choice(self.endpoints)
         return [time_stamp, ip, endpoint]
 
@@ -164,7 +151,7 @@ class MockDB:
             ]
 
     def people_writer(self) -> list[Any]:
-        time_stamp = self.generate_time(self.start_time, self.end_time)
+        time_stamp = generate_time(self.start_time, self.end_time)
         person = str(base64.b64encode(random.choice(self.person_names).encode()))[2:-1]
         loc_id = random.choice(range(len(self.locations)))
         if (
@@ -202,11 +189,9 @@ class MockDB:
                 f"192.168.{x}.{end}",
             ]
 
-
 def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
         mdb.init_tables().write_tables().log_answer()
-
 
 if __name__ == "__main__":
     gen_db(0)
