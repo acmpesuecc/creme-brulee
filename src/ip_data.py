@@ -69,14 +69,15 @@ def generate_time(start_time: datetime, end_time: datetime) -> datetime:
     return start_time + timedelta(seconds=random_seconds)
 
 
-def interleave(iters: list[Iterator[T]]) -> Iterator[T]:
-    while iters:
-        chosen = min(random.binomialvariate(1, 0.7), len(iters) - 1)
-        it = iters[chosen]
+def interleave(*iters: Iterator[T]) -> Iterator[T]:
+    liters = list(iters)
+    while liters:
+        chosen = min(random.binomialvariate(1, 0.7), len(liters) - 1)
+        it = liters[chosen]
         try:
             yield next(it)
         except StopIteration:
-            iters.remove(it)
+            liters.remove(it)
 
 
 def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
@@ -85,6 +86,10 @@ def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
 
 
 class FileWriter(ABC):
+    @abstractmethod
+    def __init__(self, filename: str) -> None:
+        pass
+
     @abstractmethod
     def write_access(self, generator: Iterator[list[Any]]) -> None:
         pass
@@ -107,10 +112,9 @@ class FileWriter(ABC):
 
 
 class JSONFileWriter(FileWriter):
-    def __init__(self, base_filename: str):
+    def __init__(self, filename: str):
         self.is_first_key = True
-        self.base_filename = base_filename
-        self.json_file = open(f"{self.base_filename}.json", "w")
+        self.json_file = open(f"{filename}.json", "w")
         self.json_file.write("{")
 
     def init_tables(self) -> None:
@@ -149,8 +153,8 @@ class JSONFileWriter(FileWriter):
 
 
 class SqliteWriter(FileWriter):
-    def __init__(self, base_filename: str):
-        self.db = sqlite3.connect(f"{base_filename}.db")
+    def __init__(self, filename: str):
+        self.db = sqlite3.connect(f"{filename}.db")
         self.cursor = self.db.cursor()
 
     def close(self) -> None:
@@ -221,19 +225,6 @@ class MockDB:
             "}",
         )
 
-    def write_to_file(
-        self,
-        schema: list[str],
-        tablename: str,
-        targets: Iterator[list[Any]],
-        normal: Iterator[list[Any]],
-    ) -> None:
-        with open(tablename, mode="w") as file:
-            writer = csv.writer(file)
-            writer.writerow(schema)
-            for record in interleave([targets, normal]):
-                writer.writerow(record)
-
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
         self.writer_class = writer_class
 
@@ -244,9 +235,15 @@ class MockDB:
         return self
 
     def write_tables(self) -> Self:
-        self.writer.write_access(repeat(self.access_writer, NUM_ROWS))
-        self.writer.write_people(repeat(self.people_writer, NUM_ROWS))
-        self.writer.write_subnet(self.subnet_target())
+        self.writer.write_access(
+            interleave(repeat(self.access_writer, NUM_ROWS), self.access_target())
+        )
+        self.writer.write_people(
+            interleave(repeat(self.people_writer, NUM_ROWS), self.people_target())
+        )
+        self.writer.write_subnet(
+            interleave(repeat(self.subnet_writer, 0), self.subnet_target())
+        )
         return self
 
     def access_writer(self) -> list[Any]:
