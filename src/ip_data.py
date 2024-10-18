@@ -100,6 +100,18 @@ class FileWriter(ABC):
     def write_subnet(self, generator: Iterator[List[Any]]) -> None:
         pass
 
+    @abstractmethod
+    def init_tables(self) -> None:
+        pass
+
+    @abstractmethod
+    def __enter__(self):
+        return self
+
+    @abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
 
 class JSONFileWriter(FileWriter):
     def _write_to_json(self, filename: str, schema: List[str], generator: Iterator[List[Any]]) -> None:
@@ -117,6 +129,15 @@ class JSONFileWriter(FileWriter):
 
     def write_subnet(self, generator: Iterator[List[Any]]) -> None:
         self._write_to_json("subnet", SUBNET_SCHEMA, generator)
+
+    def init_tables(self) -> None:
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
 
 
 class SqliteWriter(FileWriter):
@@ -180,13 +201,10 @@ class MockDB:
         )[2:-1]
 
     def __enter__(self) -> Self:
-        self.db = sqlite3.connect(f"challenge_{self.dbid}.db")
-        self.cursor = self.db.cursor()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.db.commit()
-        self.db.close()
+        pass
 
     def log_answer(self) -> None:
         print(
@@ -198,20 +216,6 @@ class MockDB:
             f'"location": "{LOCATIONS[self.target_location]}"',
             "}",
         )
-
-    def init_tables(self) -> Self:
-        def add_type(fi: str) -> str:
-            return fi + " TEXT"
-
-        access_q = ",".join(map(add_type, ACCESS_SCHEMA))
-        people_q = ",".join(map(add_type, PEOPLE_SCHEMA))
-        subnet_q = ",".join(map(add_type, SUBNET_SCHEMA))
-
-        self.cursor.execute(f"CREATE TABLE access({access_q})")
-        self.cursor.execute(f"CREATE TABLE people({people_q})")
-        self.cursor.execute(f"CREATE TABLE subnet({subnet_q})")
-        self.db.commit()
-        return self
 
     def write_to_file(
         self,
@@ -226,20 +230,17 @@ class MockDB:
             for record in interleave([targets, normal]):
                 writer.writerow(record)
 
-    def write_tables(self, writer_class: type[FileWriter]) -> Self:
-        writer = writer_class(f"challenge_{self.dbid}")
+    def with_writer(self, writer_class: type[FileWriter]) -> Self:
+        self.writer_class = writer_class
 
-        if isinstance(writer, SqliteWriter):
-            with writer:
-                writer.init_tables()
-                writer.write_access(repeat(self.access_writer, NUM_ROWS))
-                writer.write_people(repeat(self.people_writer, NUM_ROWS))
-                writer.write_subnet(self.subnet_target())
-        else:
+        return self
+
+    def write_tables(self) -> Self:
+        with self.writer_class(f"challenge_{self.dbid}") as writer:
+            writer.init_tables()
             writer.write_access(repeat(self.access_writer, NUM_ROWS))
             writer.write_people(repeat(self.people_writer, NUM_ROWS))
             writer.write_subnet(self.subnet_target())
-
         return self
 
     def access_writer(self) -> list[Any]:
@@ -300,7 +301,7 @@ class MockDB:
 
 def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
-        mdb.init_tables().write_tables(SqliteWriter).log_answer()
+        mdb.with_writer(JSONFileWriter).write_tables().log_answer()
 
 
 if __name__ == "__main__":
