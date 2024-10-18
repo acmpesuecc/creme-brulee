@@ -127,8 +127,7 @@ class JSONFileWriter(FileWriter):
         for record in generator:
             if not is_first_record:
                 self.json_file.write(",")
-            json.dump(
-                dict(zip(schema, map(str, record))), self.json_file)
+            json.dump(dict(zip(schema, map(str, record))), self.json_file)
             is_first_record = False
         self.json_file.write("]")
 
@@ -158,7 +157,9 @@ class SqliteWriter(FileWriter):
         self.db.commit()
         self.db.close()
 
-    def _write_to_db(self, table_name: str, schema: list[str], generator: Iterator[list[Any]]) -> None:
+    def _write_to_db(
+        self, table_name: str, schema: list[str], generator: Iterator[list[Any]]
+    ) -> None:
         columns = ", ".join(schema)
         placeholders = ", ".join(["?"] * len(schema))
         query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
@@ -185,12 +186,9 @@ class SqliteWriter(FileWriter):
         people_schema = ", ".join(map(add_type, PEOPLE_SCHEMA))
         subnet_schema = ", ".join(map(add_type, SUBNET_SCHEMA))
 
-        self.cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS access({access_schema})")
-        self.cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS people({people_schema})")
-        self.cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS subnet({subnet_schema})")
+        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS access({access_schema})")
+        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS people({people_schema})")
+        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS subnet({subnet_schema})")
         self.db.commit()
 
 
@@ -267,12 +265,10 @@ class MockDB:
 
     def people_writer(self) -> list[Any]:
         time_stamp = generate_time(START_TIME, END_TIME)
-        person = str(base64.b64encode(
-            random.choice(PERSON_NAMES).encode()))[2:-1]
+        person = str(base64.b64encode(random.choice(PERSON_NAMES).encode()))[2:-1]
         loc_id = random.choice(range(len(LOCATIONS)))
         if (
-            self.target_time < time_stamp < self.target_time +
-                timedelta(seconds=15)
+            self.target_time < time_stamp < self.target_time + timedelta(seconds=15)
             and loc_id == self.target_location
         ):
             time_stamp += timedelta(seconds=30)
@@ -309,8 +305,7 @@ class MockDB:
 
 def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
-        mdb.with_writer(JSONFileWriter).init_tables(
-        ).write_tables().log_answer()
+        mdb.with_writer(JSONFileWriter).init_tables().write_tables().log_answer()
 
 
 if __name__ == "__main__":
