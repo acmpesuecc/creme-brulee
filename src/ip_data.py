@@ -207,7 +207,6 @@ class MockDB:
 
     def __enter__(self) -> Self:
         self.writer = self.writer_class(f"challenge_{self.dbid}")
-        self.writer.init_tables()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -240,6 +239,10 @@ class MockDB:
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
         self.writer_class = writer_class
 
+        return self
+
+    def init_tables(self) -> Self:
+        self.writer.init_tables()
         return self
 
     def write_tables(self) -> Self:
@@ -306,7 +309,8 @@ class MockDB:
 
 def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
-        mdb.with_writer(JSONFileWriter).write_tables().log_answer()
+        mdb.with_writer(JSONFileWriter).init_tables(
+        ).write_tables().log_answer()
 
 
 if __name__ == "__main__":
