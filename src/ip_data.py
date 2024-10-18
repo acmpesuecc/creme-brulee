@@ -301,8 +301,8 @@ class MockDB:
 
 
 def gen_db(dbidx: int) -> None:
-    with MockDB(dbidx) as mdb:
-        mdb.with_writer(JSONFileWriter).init_tables().write_tables().log_answer()
+    with MockDB(dbidx).with_writer(JSONFileWriter) as mdb:
+        mdb.init_tables().write_tables().log_answer()
 
 
 if __name__ == "__main__":
