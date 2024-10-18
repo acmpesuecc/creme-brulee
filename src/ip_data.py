@@ -1,4 +1,3 @@
-import csv
 import json
 import base64
 import random
@@ -169,7 +168,7 @@ class SqliteWriter(FileWriter):
         query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
         for record in generator:
-            self.cursor.execute(query, record)
+            self.cursor.execute(query, list(map(str, record)))
 
         self.db.commit()
 
