@@ -108,12 +108,10 @@ class FileWriter(ABC):
 
 class JSONFileWriter(FileWriter):
     def __init__(self, base_filename: str):
-        self.json_file = None
         self.is_first_key = True
         self.base_filename = base_filename
         self.json_file = open(f"{self.base_filename}.json", "w")
         self.json_file.write("{")
-
 
     def init_tables(self) -> None:
         pass
@@ -208,6 +206,7 @@ class MockDB:
         )[2:-1]
 
     def __enter__(self) -> Self:
+        self.writer = self.writer_class(f"challenge_{self.dbid}")
         self.writer.init_tables()
         return self
 
@@ -239,7 +238,7 @@ class MockDB:
                 writer.writerow(record)
 
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
-        self.writer = writer_class(f"challenge_{self.dbid}")
+        self.writer_class = writer_class
 
         return self
 
