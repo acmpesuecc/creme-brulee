@@ -1,10 +1,12 @@
 import csv
-import random
-from datetime import datetime, timedelta
-from typing import Callable, Any, Iterator, Self, TypeVar
+import json
 import base64
-
+import random
 import sqlite3
+from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from typing import Callable, Any, Iterator, Self, TypeVar, List
+
 
 T = TypeVar("T")
 
@@ -78,8 +80,92 @@ def interleave(iters: list[Iterator[T]]) -> Iterator[T]:
 
 
 def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
-    for i in range(times):
+    for _ in range(times):
         yield genrec()
+
+
+class FileWriter(ABC):
+    def __init__(self, base_filename: str):
+        self.base_filename = base_filename
+
+    @abstractmethod
+    def write_access(self, generator: Iterator[List[Any]]) -> None:
+        pass
+
+    @abstractmethod
+    def write_people(self, generator: Iterator[List[Any]]) -> None:
+        pass
+
+    @abstractmethod
+    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+        pass
+
+
+class JSONFileWriter(FileWriter):
+    def _write_to_json(self, filename: str, schema: List[str], generator: Iterator[List[Any]]) -> None:
+        result = []
+        for record in generator:
+            result.append(dict(zip(schema, map(str, record))))
+        with open(f"{self.base_filename}_{filename}.json", mode="w") as file:
+            json.dump(result, file, indent=2)
+
+    def write_access(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_json("access", ACCESS_SCHEMA, generator)
+
+    def write_people(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_json("people", PEOPLE_SCHEMA, generator)
+
+    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_json("subnet", SUBNET_SCHEMA, generator)
+
+
+class SqliteWriter(FileWriter):
+    def __init__(self, base_filename: str):
+        super().__init__(base_filename)
+        self.db = sqlite3.connect(f"{self.base_filename}.db")
+        self.cursor = self.db.cursor()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.db.commit()
+        self.db.close()
+
+    def _write_to_db(self, table_name: str, schema: List[str], generator: Iterator[List[Any]]) -> None:
+        columns = ", ".join(schema)
+        placeholders = ", ".join(["?"] * len(schema))
+        query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+
+        for record in generator:
+            self.cursor.execute(query, record)
+
+        self.db.commit()
+
+    def write_access(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_db("access", ACCESS_SCHEMA, generator)
+
+    def write_people(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_db("people", PEOPLE_SCHEMA, generator)
+
+    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+        self._write_to_db("subnet", SUBNET_SCHEMA, generator)
+
+    def init_tables(self) -> None:
+        def add_type(field: str) -> str:
+            return f"{field} TEXT"
+
+        access_schema = ", ".join(map(add_type, ACCESS_SCHEMA))
+        people_schema = ", ".join(map(add_type, PEOPLE_SCHEMA))
+        subnet_schema = ", ".join(map(add_type, SUBNET_SCHEMA))
+
+        self.cursor.execute(
+            f"CREATE TABLE IF NOT EXISTS access({access_schema})")
+        self.cursor.execute(
+            f"CREATE TABLE IF NOT EXISTS people({people_schema})")
+        self.cursor.execute(
+            f"CREATE TABLE IF NOT EXISTS subnet({subnet_schema})")
+        self.db.commit()
 
 
 class MockDB:
@@ -127,21 +213,6 @@ class MockDB:
         self.db.commit()
         return self
 
-    def write_to_db(
-        self,
-        schema: list[str],
-        tablename: str,
-        targets: Iterator[list[Any]],
-        normal: Iterator[list[Any]],
-    ) -> None:
-        params = ", ".join(["?"] * len(schema))
-        for record in interleave([targets, normal]):
-            self.cursor.execute(
-                f"INSERT INTO {tablename} VALUES ({params})",
-                list(map(str, record)),
-            )
-        self.db.commit()
-
     def write_to_file(
         self,
         schema: list[str],
@@ -155,25 +226,20 @@ class MockDB:
             for record in interleave([targets, normal]):
                 writer.writerow(record)
 
-    def write_tables(self) -> Self:
-        self.write_to_db(
-            ACCESS_SCHEMA,
-            "access",
-            self.access_target(),
-            repeat(self.access_writer, NUM_ROWS),
-        )
-        self.write_to_db(
-            PEOPLE_SCHEMA,
-            "people",
-            self.people_target(),
-            repeat(self.people_writer, NUM_ROWS),
-        )
-        self.write_to_db(
-            SUBNET_SCHEMA,
-            "subnet",
-            self.subnet_target(),
-            repeat(self.subnet_writer, 0),
-        )
+    def write_tables(self, writer_class: type[FileWriter]) -> Self:
+        writer = writer_class(f"challenge_{self.dbid}")
+
+        if isinstance(writer, SqliteWriter):
+            with writer:
+                writer.init_tables()
+                writer.write_access(repeat(self.access_writer, NUM_ROWS))
+                writer.write_people(repeat(self.people_writer, NUM_ROWS))
+                writer.write_subnet(self.subnet_target())
+        else:
+            writer.write_access(repeat(self.access_writer, NUM_ROWS))
+            writer.write_people(repeat(self.people_writer, NUM_ROWS))
+            writer.write_subnet(self.subnet_target())
+
         return self
 
     def access_writer(self) -> list[Any]:
@@ -192,10 +258,12 @@ class MockDB:
 
     def people_writer(self) -> list[Any]:
         time_stamp = generate_time(START_TIME, END_TIME)
-        person = str(base64.b64encode(random.choice(PERSON_NAMES).encode()))[2:-1]
+        person = str(base64.b64encode(
+            random.choice(PERSON_NAMES).encode()))[2:-1]
         loc_id = random.choice(range(len(LOCATIONS)))
         if (
-            self.target_time < time_stamp < self.target_time + timedelta(seconds=15)
+            self.target_time < time_stamp < self.target_time +
+                timedelta(seconds=15)
             and loc_id == self.target_location
         ):
             time_stamp += timedelta(seconds=30)
@@ -232,7 +300,7 @@ class MockDB:
 
 def gen_db(dbidx: int) -> None:
     with MockDB(dbidx) as mdb:
-        mdb.init_tables().write_tables().log_answer()
+        mdb.init_tables().write_tables(SqliteWriter).log_answer()
 
 
 if __name__ == "__main__":
