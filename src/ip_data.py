@@ -111,10 +111,9 @@ class FileWriter(ABC):
 
 class JSONFileWriter(FileWriter):
     def __init__(self, base_filename: str):
-        super().__init__(base_filename)
         self.json_file = None
         self.is_first_key = True
-        self.init_tables()
+        self.base_filename = base_filename
 
     def init_tables(self) -> None:
         self.json_file = open(f"{self.base_filename}.json", "w")
@@ -156,10 +155,8 @@ class JSONFileWriter(FileWriter):
 
 class SqliteWriter(FileWriter):
     def __init__(self, base_filename: str):
-        super().__init__(base_filename)
-        self.db = sqlite3.connect(f"{self.base_filename}.db")
+        self.db = sqlite3.connect(f"{base_filename}.db")
         self.cursor = self.db.cursor()
-        self.init_tables()
 
     def __enter__(self) -> Self:
         return self
@@ -247,6 +244,7 @@ class MockDB:
 
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
         self.writer = writer_class(f"challenge_{self.dbid}")
+        self.writer.init_tables()
 
         return self
 
