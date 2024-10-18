@@ -85,9 +85,6 @@ def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
 
 
 class FileWriter(ABC):
-    def __init__(self):
-        pass
-
     @abstractmethod
     def write_access(self, generator: Iterator[list[Any]]) -> None:
         pass
