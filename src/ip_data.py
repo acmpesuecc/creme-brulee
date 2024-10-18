@@ -105,39 +105,53 @@ class FileWriter(ABC):
         pass
 
     @abstractmethod
-    def __enter__(self):
-        return self
-
-    @abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def close(self) -> None:
         pass
 
 
 class JSONFileWriter(FileWriter):
-    def _write_to_json(self, filename: str, schema: List[str], generator: Iterator[List[Any]]) -> None:
-        result = []
-        for record in generator:
-            result.append(dict(zip(schema, map(str, record))))
-        with open(f"{self.base_filename}_{filename}.json", mode="w") as file:
-            json.dump(result, file, indent=2)
-
-    def write_access(self, generator: Iterator[List[Any]]) -> None:
-        self._write_to_json("access", ACCESS_SCHEMA, generator)
-
-    def write_people(self, generator: Iterator[List[Any]]) -> None:
-        self._write_to_json("people", PEOPLE_SCHEMA, generator)
-
-    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
-        self._write_to_json("subnet", SUBNET_SCHEMA, generator)
+    def __init__(self, base_filename: str):
+        super().__init__(base_filename)
+        self.json_file = None
+        self.is_first_key = True
+        self.init_tables()
 
     def init_tables(self) -> None:
-        pass
+        self.json_file = open(f"{self.base_filename}.json", "w")
+        self.json_file.write("{")
 
-    def __enter__(self):
-        return self
+    def _write_key(self, key: str) -> None:
+        if not self.is_first_key:
+            self.json_file.write(",")
+        self.json_file.write(f'"{key}": [')
+        self.is_first_key = False
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+    def _write_records(self, schema: List[str], generator: Iterator[List[Any]]) -> None:
+        is_first_record = True
+        for record in generator:
+            if not is_first_record:
+                self.json_file.write(",")
+            json_record = json.dumps(dict(zip(schema, map(str, record))))
+            self.json_file.write(json_record)
+            is_first_record = False
+        self.json_file.write("]")
+
+    def write_access(self, generator: Iterator[List[Any]]) -> None:
+        self._write_key("access")
+        self._write_records(ACCESS_SCHEMA, generator)
+
+    def write_people(self, generator: Iterator[List[Any]]) -> None:
+        self._write_key("people")
+        self._write_records(PEOPLE_SCHEMA, generator)
+
+    def write_subnet(self, generator: Iterator[List[Any]]) -> None:
+        self._write_key("subnet")
+        self._write_records(SUBNET_SCHEMA, generator)
+
+    def close(self):
+        if self.json_file:
+            self.json_file.write("}")
+            self.json_file.close()
 
 
 class SqliteWriter(FileWriter):
@@ -145,6 +159,7 @@ class SqliteWriter(FileWriter):
         super().__init__(base_filename)
         self.db = sqlite3.connect(f"{self.base_filename}.db")
         self.cursor = self.db.cursor()
+        self.init_tables()
 
     def __enter__(self) -> Self:
         return self
@@ -204,7 +219,7 @@ class MockDB:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        pass
+        self.writer.close()
 
     def log_answer(self) -> None:
         print(
@@ -231,16 +246,14 @@ class MockDB:
                 writer.writerow(record)
 
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
-        self.writer_class = writer_class
+        self.writer = writer_class(f"challenge_{self.dbid}")
 
         return self
 
     def write_tables(self) -> Self:
-        with self.writer_class(f"challenge_{self.dbid}") as writer:
-            writer.init_tables()
-            writer.write_access(repeat(self.access_writer, NUM_ROWS))
-            writer.write_people(repeat(self.people_writer, NUM_ROWS))
-            writer.write_subnet(self.subnet_target())
+        self.writer.write_access(repeat(self.access_writer, NUM_ROWS))
+        self.writer.write_people(repeat(self.people_writer, NUM_ROWS))
+        self.writer.write_subnet(self.subnet_target())
         return self
 
     def access_writer(self) -> list[Any]:
