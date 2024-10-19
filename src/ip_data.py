@@ -5,100 +5,42 @@ import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Callable, Any, Iterator, Self, TypeVar
-
+from dataclasses import dataclass
 
 T = TypeVar("T")
 
-NUM_ROWS = 100  # Number of rows to generate
-DDOS = 10
-START_TIME = datetime.now() - timedelta(days=1)
-END_TIME = datetime.now()
+@dataclass
+class MockDBConfig:
+    num_rows: int = 100
+    ddos_attempts: int = 10
+    start_time: datetime = datetime.now() - timedelta(days=1)
+    end_time: datetime = datetime.now()
+    endpoints: list[str] = None
+    locations: list[str] = None
+    person_names: list[str] = None
 
-ACCESS_SCHEMA = ["time", "ip", "end_point"]
-PEOPLE_SCHEMA = ["time", "person_name", "location_id"]
-SUBNET_SCHEMA = ["location_id", "location_name", "subnet_start", "subnet_end"]
-
-ENDPOINTS = [
-    "/users",
-    "/leaderboard",
-    "/food",
-    "/dinner",
-    "/register",
-    "/pay",
-]
-LOCATIONS = [
-    "bathroom",
-    "seminar-hall-1",
-    "seminar-hall-2",
-    "canteen-4-floor",
-    "canteen-5-floor",
-    "canteen-pixel-block",
-    "mrd-auditorium",
-]
-PERSON_NAMES = [
-    "potukuchi",
-    "naga",
-    "sriprad",
-    "reema",
-    "adhesh",
-    "gamblesh",
-    "aditya",
-    "sudhir",
-    "bevdesh",
-    "kiran",
-    "achyuth",
-    "suraj",
-    "abhinav",
-    "kaddapa",
-    "rowjee",
-    "🗿",
-]
-
-
-# Function to generate a mock IP address in the format 192.168.x.y
-def generate_ip() -> str:
-    x = random.randint(0, len(LOCATIONS) - 1)
-    y = random.randint(0, 255)
-    return f"{192}.{168}.{x}.{y}"
-
-
-def generate_time(start_time: datetime, end_time: datetime) -> datetime:
-    delta = end_time - start_time
-    random_seconds = random.randint(0, int(delta.total_seconds()))
-    return start_time + timedelta(seconds=random_seconds)
-
-
-def interleave(*iters: Iterator[T]) -> Iterator[T]:
-    liters = list(iters)
-    while liters:
-        chosen = min(random.binomialvariate(1, 0.7), len(liters) - 1)
-        it = liters[chosen]
-        try:
-            yield next(it)
-        except StopIteration:
-            liters.remove(it)
-
-
-def repeat(genrec: Callable[[], T], times: int) -> Iterator[T]:
-    for _ in range(times):
-        yield genrec()
-
+    def __post_init__(self):
+        # Default values if not provided
+        self.endpoints = self.endpoints or [
+            "/users", "/leaderboard", "/food", "/dinner", "/register", "/pay"
+        ]
+        self.locations = self.locations or [
+            "bathroom", "seminar-hall-1", "seminar-hall-2", "canteen-4-floor",
+            "canteen-5-floor", "canteen-pixel-block", "mrd-auditorium"
+        ]
+        self.person_names = self.person_names or [
+            "potukuchi", "naga", "sriprad", "reema", "adhesh", "gamblesh",
+            "aditya", "sudhir", "bevdesh", "kiran", "achyuth", "suraj",
+            "abhinav", "kaddapa", "rowjee", "🗿"
+        ]
 
 class FileWriter(ABC):
     @abstractmethod
-    def __init__(self, filename: str) -> None:
+    def __init__(self, filename: str, schemas: list[list[str]]) -> None:
         pass
 
     @abstractmethod
-    def write_access(self, generator: Iterator[list[Any]]) -> None:
-        pass
-
-    @abstractmethod
-    def write_people(self, generator: Iterator[list[Any]]) -> None:
-        pass
-
-    @abstractmethod
-    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
+    def write_table(self, table_name: str, schema_idx: int, generator: Iterator[list[Any]]) -> None:
         pass
 
     @abstractmethod
@@ -109,9 +51,9 @@ class FileWriter(ABC):
     def close(self) -> None:
         pass
 
-
 class JSONFileWriter(FileWriter):
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, schemas: list[list[str]]):
+        self.schemas = schemas
         self.is_first_key = True
         self.json_file = open(f"{filename}.json", "w")
         self.json_file.write("{")
@@ -125,89 +67,72 @@ class JSONFileWriter(FileWriter):
         self.json_file.write(f'"{key}": [')
         self.is_first_key = False
 
-    def _write_records(self, schema: list[str], generator: Iterator[list[Any]]) -> None:
+    def write_table(self, table_name: str, schema_idx: int, generator: Iterator[list[Any]]) -> None:
+        self._write_key(table_name)
         is_first_record = True
         for record in generator:
             if not is_first_record:
                 self.json_file.write(",")
-            json.dump(dict(zip(schema, map(str, record))), self.json_file)
+            json.dump(dict(zip(self.schemas[schema_idx], map(str, record))), self.json_file)
             is_first_record = False
         self.json_file.write("]")
-
-    def write_access(self, generator: Iterator[list[Any]]) -> None:
-        self._write_key("access")
-        self._write_records(ACCESS_SCHEMA, generator)
-
-    def write_people(self, generator: Iterator[list[Any]]) -> None:
-        self._write_key("people")
-        self._write_records(PEOPLE_SCHEMA, generator)
-
-    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
-        self._write_key("subnet")
-        self._write_records(SUBNET_SCHEMA, generator)
 
     def close(self):
         self.json_file.write("}")
         self.json_file.close()
 
-
 class SqliteWriter(FileWriter):
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, schemas: list[list[str]]):
+        self.schemas = schemas
         self.db = sqlite3.connect(f"{filename}.db")
         self.cursor = self.db.cursor()
 
-    def close(self) -> None:
+    def init_tables(self) -> None:
+        for idx, schema in enumerate(self.schemas):
+            table_name = f"table_{idx}"
+            schema_str = ", ".join(f"{field} TEXT" for field in schema)
+            self.cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name}({schema_str})")
         self.db.commit()
-        self.db.close()
 
-    def _write_to_db(
-        self, table_name: str, schema: list[str], generator: Iterator[list[Any]]
-    ) -> None:
+    def write_table(self, table_name: str, schema_idx: int, generator: Iterator[list[Any]]) -> None:
+        schema = self.schemas[schema_idx]
         columns = ", ".join(schema)
         placeholders = ", ".join(["?"] * len(schema))
         query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
         for record in generator:
             self.cursor.execute(query, list(map(str, record)))
-
         self.db.commit()
 
-    def write_access(self, generator: Iterator[list[Any]]) -> None:
-        self._write_to_db("access", ACCESS_SCHEMA, generator)
-
-    def write_people(self, generator: Iterator[list[Any]]) -> None:
-        self._write_to_db("people", PEOPLE_SCHEMA, generator)
-
-    def write_subnet(self, generator: Iterator[list[Any]]) -> None:
-        self._write_to_db("subnet", SUBNET_SCHEMA, generator)
-
-    def init_tables(self) -> None:
-        def add_type(field: str) -> str:
-            return f"{field} TEXT"
-
-        access_schema = ", ".join(map(add_type, ACCESS_SCHEMA))
-        people_schema = ", ".join(map(add_type, PEOPLE_SCHEMA))
-        subnet_schema = ", ".join(map(add_type, SUBNET_SCHEMA))
-
-        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS access({access_schema})")
-        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS people({people_schema})")
-        self.cursor.execute(f"CREATE TABLE IF NOT EXISTS subnet({subnet_schema})")
+    def close(self) -> None:
         self.db.commit()
-
+        self.db.close()
 
 class MockDB:
-    def __init__(self, dbid: int) -> None:
+    def __init__(self, dbid: int, config: MockDBConfig, schemas: list[list[str]]) -> None:
         self.dbid = dbid
-        self.target_time = generate_time(START_TIME, END_TIME)
-        self.target_ip = generate_ip()
-        self.target_location = random.randint(0, len(LOCATIONS) - 1)
+        self.config = config
+        self.schemas = schemas
+        self.target_time = self._generate_time()
+        self.target_ip = self._generate_ip()
+        self.target_location = random.randint(0, len(self.config.locations) - 1)
         self.target_subnet = random.randint(0, 255)
         self.target_person = str(
-            base64.b64encode(random.choice(PERSON_NAMES).encode())
+            base64.b64encode(random.choice(self.config.person_names).encode())
         )[2:-1]
 
+    def _generate_ip(self) -> str:
+        x = random.randint(0, len(self.config.locations) - 1)
+        y = random.randint(0, 255)
+        return f"{192}.{168}.{x}.{y}"
+
+    def _generate_time(self) -> datetime:
+        delta = self.config.end_time - self.config.start_time
+        random_seconds = random.randint(0, int(delta.total_seconds()))
+        return self.config.start_time + timedelta(seconds=random_seconds)
+
     def __enter__(self) -> Self:
-        self.writer = self.writer_class(f"challenge_{self.dbid}")
+        self.writer = self.writer_class(f"challenge_{self.dbid}", self.schemas)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -220,13 +145,12 @@ class MockDB:
             f'"time": "{str(self.target_time)}", '
             f'"name": "{base64.decodebytes(self.target_person.encode()).decode()}", '
             f'"ip": "{self.target_ip}", '
-            f'"location": "{LOCATIONS[self.target_location]}"',
+            f'"location": "{self.config.locations[self.target_location]}"',
             "}",
         )
 
     def with_writer(self, writer_class: type[FileWriter]) -> Self:
         self.writer_class = writer_class
-
         return self
 
     def init_tables(self) -> Self:
@@ -234,35 +158,45 @@ class MockDB:
         return self
 
     def write_tables(self) -> Self:
-        self.writer.write_access(
-            interleave(repeat(self.access_writer, NUM_ROWS), self.access_target())
+        # Write access logs (table 0)
+        self.writer.write_table(
+            "access", 0,
+            interleave(repeat(self.access_writer, self.config.num_rows), 
+                      self.access_target())
         )
-        self.writer.write_people(
-            interleave(repeat(self.people_writer, NUM_ROWS), self.people_target())
+        
+        # Write people logs (table 1)
+        self.writer.write_table(
+            "people", 1,
+            interleave(repeat(self.people_writer, self.config.num_rows), 
+                      self.people_target())
         )
-        self.writer.write_subnet(
+        
+        # Write subnet logs (table 2)
+        self.writer.write_table(
+            "subnet", 2,
             interleave(repeat(self.subnet_writer, 0), self.subnet_target())
         )
         return self
 
     def access_writer(self) -> list[Any]:
-        time_stamp = generate_time(START_TIME, END_TIME)
-        ip = generate_ip()
-        endpoint = random.choice(ENDPOINTS)
+        time_stamp = self._generate_time()
+        ip = self._generate_ip()
+        endpoint = random.choice(self.config.endpoints)
         return [time_stamp, ip, endpoint]
 
     def access_target(self) -> Iterator[list[Any]]:
-        for i in range(DDOS):
+        for _ in range(self.config.ddos_attempts):
             yield [
                 self.target_time + timedelta(seconds=random.randint(1, 15)),
                 self.target_ip,
-                random.choice(ENDPOINTS),
+                random.choice(self.config.endpoints),
             ]
 
     def people_writer(self) -> list[Any]:
-        time_stamp = generate_time(START_TIME, END_TIME)
-        person = str(base64.b64encode(random.choice(PERSON_NAMES).encode()))[2:-1]
-        loc_id = random.choice(range(len(LOCATIONS)))
+        time_stamp = self._generate_time()
+        person = str(base64.b64encode(random.choice(self.config.person_names).encode()))[2:-1]
+        loc_id = random.choice(range(len(self.config.locations)))
         if (
             self.target_time < time_stamp < self.target_time + timedelta(seconds=15)
             and loc_id == self.target_location
@@ -281,11 +215,11 @@ class MockDB:
         end = random.randint(start, 255)
         target_subnet_entry = [
             self.target_location,
-            LOCATIONS[self.target_location],
+            self.config.locations[self.target_location],
             f"192.168.{self.target_location}.{start}",
             f"192.168.{self.target_location}.{end}",
         ]
-        for x in range(len(LOCATIONS)):
+        for x in range(len(self.config.locations)):
             if x == self.target_location:
                 yield target_subnet_entry
                 continue
@@ -293,16 +227,24 @@ class MockDB:
             end = random.randint(start, 255)
             yield [
                 x,
-                LOCATIONS[x],
+                self.config.locations[x],
                 f"192.168.{x}.{start}",
                 f"192.168.{x}.{end}",
             ]
 
-
 def gen_db(dbidx: int) -> None:
-    with MockDB(dbidx).with_writer(JSONFileWriter) as mdb:
+    # Define default schemas
+    schemas = [
+        ["time", "ip", "end_point"],  # access schema
+        ["time", "person_name", "location_id"],  # people schema
+        ["location_id", "location_name", "subnet_start", "subnet_end"]  # subnet schema
+    ]
+    
+    # Create default config
+    config = MockDBConfig()
+    
+    with MockDB(dbidx, config, schemas).with_writer(JSONFileWriter) as mdb:
         mdb.init_tables().write_tables().log_answer()
-
 
 if __name__ == "__main__":
     gen_db(0)
